@@ -12,12 +12,6 @@ Giữa hai nét, đầu công tác được nâng khỏi mặt phẳng vẽ trư
 vị trí mới. Các Marker màu xanh lá biểu diễn quỹ đạo dự kiến và Marker màu
 cam biểu diễn quỹ đạo thực tế của `tool0`.
 
-Chuyển động tiếp cận được lập kế hoạch với một mặt sàn va chạm. Chương trình
-thử nhiều kế hoạch không va chạm, loại bỏ kế hoạch có tổng chuyển động của
-bất kỳ khớp nào vượt quá `max_joint_travel`, rồi thực thi kế hoạch có tổng
-chuyển động khớp nhỏ nhất. Mỗi nét vẽ phải tạo được quỹ đạo Cartesian hoàn
-chỉnh, nằm trong giới hạn khớp và không vượt quá bước khớp tối đa đã cấu hình.
-
 ## Biên dịch
 
 Chạy tại thư mục gốc của repository:
