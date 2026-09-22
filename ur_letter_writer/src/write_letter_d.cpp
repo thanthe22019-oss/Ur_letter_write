@@ -100,7 +100,7 @@ Settings loadSettings(const rclcpp::Node::SharedPtr& node)
     readParameter<double>(node, "eef_step", 0.005),
     readParameter<double>(node, "jump_threshold", 0.0),
     readParameter<double>(node, "max_joint_step", 0.20),
-    readParameter<double>(node, "max_joint_travel", 5.0),
+    readParameter<double>(node, "max_joint_travel", 5.5),
     readParameter<int>(node, "approach_planning_attempts", 5),
     readParameter<double>(node, "minimum_path_fraction", 0.995),
     readParameter<double>(node, "velocity_scaling", 0.15),

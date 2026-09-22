@@ -30,10 +30,10 @@
     # per-joint limit below to every generated trajectory point.
     jump_threshold: 0.0
     max_joint_step: 0.20
-    # Reject any path that accumulates an almost full revolution at one joint.
-    # Allow the collision-free approach to change IK branches when needed,
-    # while still rejecting the unwanted full 2*pi revolution.
-    max_joint_travel: 5.0
+    # The shortest collision-free approach normally needs about 5.0 rad of
+    # accumulated travel at one wrist joint. Keep enough margin for planner
+    # interpolation while still rejecting an unwanted full 2*pi revolution.
+    max_joint_travel: 5.5
     # Generate several collision-checked approach plans and execute the one
     # with the least total joint motion.
     approach_planning_attempts: 5
