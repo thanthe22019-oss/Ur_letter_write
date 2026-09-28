@@ -1,4 +1,12 @@
-# Robot UR viết chữ D
+# Bài thực hành UR3e với ROS 2 và MoveIt 2
+
+Repository hiện gồm hai nội dung:
+
+- `ur_letter_writer`: điều khiển UR3e vẽ chữ D bằng MoveIt 2;
+- `ur3_llm_control`: môi trường bàn, ba cube và ba vùng đích để phát triển
+  điều khiển robot bằng ngôn ngữ tự nhiên.
+
+## Bài vẽ chữ D
 
 Package ROS 2 Humble này sử dụng MoveIt 2 để điều khiển khung `tool0` của
 robot UR3 hoặc UR3e mô phỏng vẽ chữ **D**.
@@ -28,4 +36,24 @@ Lệnh dưới đây khởi động UR3e, Gazebo, MoveIt, RViz và node vẽ ch�
 
 ```bash
 ros2 launch ur_letter_writer write_letter_d.launch.py
+```
+
+## Môi trường điều khiển bằng ngôn ngữ tự nhiên
+
+Milestone 2 tạo một bàn thao tác, `red_cube`, `yellow_cube`, `blue_cube` và
+ba vùng `zone_a`, `zone_b`, `zone_c`. Gazebo và MoveIt Planning Scene cùng
+đọc pose, kích thước và màu sắc từ `ur3_llm_control/config/scene.yaml`.
+
+Biên dịch package:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select ur_simulation_gz ur3_llm_control
+source install/setup.bash
+```
+
+Khởi động toàn bộ UR3e, Gazebo, MoveIt, RViz và scene:
+
+```bash
+ros2 launch ur3_llm_control llm_robot.launch.py
 ```

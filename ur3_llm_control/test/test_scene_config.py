@@ -1,0 +1,48 @@
+"""Tests for the YAML-backed Gazebo and MoveIt scene configuration."""
+
+from pathlib import Path
+from xml.etree import ElementTree
+
+import pytest
+
+from ur3_llm_control.scene_config import box_sdf, gazebo_boxes, load_scene
+
+
+SCENE_FILE = Path(__file__).parents[1] / 'config' / 'scene.yaml'
+
+
+@pytest.fixture
+def scene():
+    """Load the repository's default scene."""
+    return load_scene(str(SCENE_FILE))
+
+
+def test_required_entities_are_present(scene):
+    """The assignment's three cubes and three target zones must exist."""
+    assert set(scene.objects) == {'red_cube', 'yellow_cube', 'blue_cube'}
+    assert set(scene.zones) == {'zone_a', 'zone_b', 'zone_c'}
+    assert all(spec.collision for spec in scene.objects.values())
+    assert all(not spec.collision for spec in scene.zones.values())
+
+
+def test_gazebo_sdf_uses_yaml_pose_and_size(scene):
+    """Every generated model must preserve its configured pose and size."""
+    for spec in gazebo_boxes(scene):
+        model = ElementTree.fromstring(box_sdf(spec)).find('model')
+        assert model is not None
+        assert model.attrib['name'] == spec.name
+        pose = [float(value) for value in model.findtext('pose').split()]
+        size = [
+            float(value)
+            for value in model.find('link/visual/geometry/box/size').text.split()
+        ]
+        assert pose == pytest.approx(spec.pose)
+        assert size == pytest.approx(spec.size)
+
+
+def test_cubes_rest_on_table_surface(scene):
+    """Configured cube bottoms must coincide with the table surface."""
+    table_surface = scene.table.pose[2] + scene.table.size[2] / 2.0
+    for cube in scene.objects.values():
+        cube_bottom = cube.pose[2] - cube.size[2] / 2.0
+        assert cube_bottom == pytest.approx(table_surface)
