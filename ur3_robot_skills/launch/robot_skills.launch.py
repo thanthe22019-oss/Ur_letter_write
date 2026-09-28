@@ -44,7 +44,13 @@ def _create_skill_nodes(context):
         executable='robot_skill_demo',
         name='robot_skill_demo',
         output='screen',
-        parameters=[{'server_wait_seconds': 120.0, 'use_sim_time': True}],
+        parameters=[{
+            'server_wait_seconds': 120.0,
+            'start_delay_seconds': 3.0,
+            'object_name': LaunchConfiguration('demo_object'),
+            'zone_name': LaunchConfiguration('demo_zone'),
+            'use_sim_time': True,
+        }],
         condition=IfCondition(LaunchConfiguration('run_demo')),
     )
     return [skill_server, demo]
@@ -89,9 +95,19 @@ def generate_launch_description():
                 default_value='true',
                 choices=['true', 'false'],
                 description=(
-                    'Run home -> move_above(red_cube) -> pick(red_cube) '
-                    '-> place(red_cube, zone_b).'
+                    'Run home -> move_above(object) -> pick(object) '
+                    '-> place(object, zone).'
                 ),
+            ),
+            DeclareLaunchArgument(
+                'demo_object',
+                default_value='red_cube',
+                choices=['red_cube', 'yellow_cube', 'blue_cube'],
+            ),
+            DeclareLaunchArgument(
+                'demo_zone',
+                default_value='zone_b',
+                choices=['zone_a', 'zone_b', 'zone_c'],
             ),
             DeclareLaunchArgument(
                 'scene_file',

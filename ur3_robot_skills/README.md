@@ -32,12 +32,20 @@ source install/setup.bash
 ros2 launch ur3_robot_skills robot_skills.launch.py
 ```
 
-Launch file khởi động UR3e, Gazebo, MoveIt, RViz, scene, skill server và demo
-cố định `home → move_above(red_cube) → pick(red_cube) → place(red_cube,
+Launch file khởi động UR3e, Gazebo, MoveIt, RViz, scene, skill server và mặc
+định chạy `home → move_above(red_cube) → pick(red_cube) → place(red_cube,
 zone_b)`. Thành công được xác nhận bằng dòng:
 
 ```text
 MILESTONE 3 SUCCESS: red_cube was placed in zone_b
+```
+
+Có thể chọn cube và zone khác ngay trên lệnh launch. Ví dụ chuyển
+`yellow_cube` tới `zone_a`:
+
+```bash
+ros2 launch ur3_robot_skills robot_skills.launch.py \
+  demo_object:=yellow_cube demo_zone:=zone_a
 ```
 
 Để chỉ khởi động action server mà không chạy demo tự động, dùng launch
