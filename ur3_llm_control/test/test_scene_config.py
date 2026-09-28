@@ -49,3 +49,14 @@ def test_cubes_rest_on_table_surface(scene):
     for zone in scene.zones.values():
         zone_top = zone.pose[2] + zone.size[2] / 2.0
         assert zone_top == pytest.approx(table_surface)
+
+
+def test_target_zones_form_an_even_row(scene):
+    """The three visual targets must stay aligned and evenly spaced."""
+    zone_a = scene.zones['zone_a'].pose
+    zone_b = scene.zones['zone_b'].pose
+    zone_c = scene.zones['zone_c'].pose
+    assert zone_a[0] == pytest.approx(zone_b[0])
+    assert zone_b[0] == pytest.approx(zone_c[0])
+    assert zone_a[1] - zone_b[1] == pytest.approx(0.12)
+    assert zone_b[1] - zone_c[1] == pytest.approx(0.12)
