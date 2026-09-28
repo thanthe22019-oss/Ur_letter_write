@@ -1,10 +1,12 @@
 # Bài thực hành UR3e với ROS 2 và MoveIt 2
 
-Repository hiện gồm hai nội dung:
+Repository hiện gồm ba nội dung:
 
 - `ur_letter_writer`: điều khiển UR3e vẽ chữ D bằng MoveIt 2;
 - `ur3_llm_control`: môi trường bàn, ba cube và ba vùng đích để phát triển
-  điều khiển robot bằng ngôn ngữ tự nhiên.
+  điều khiển robot bằng ngôn ngữ tự nhiên;
+- `ur3_robot_skills`: các kỹ năng MoveIt 2 có kiểm tra va chạm để robot về
+  home, tiếp cận, gắp và đặt cube.
 
 ## Bài vẽ chữ D
 
@@ -56,4 +58,33 @@ Khởi động toàn bộ UR3e, Gazebo, MoveIt, RViz và scene:
 
 ```bash
 ros2 launch ur3_llm_control llm_robot.launch.py
+```
+
+## Milestone 3: kỹ năng gắp và đặt
+
+Package `ur3_robot_skills` cung cấp action `/execute_skill` với các kỹ năng
+`home`, `move_above`, `pick` và `place`. Mỗi kỹ năng trả về trạng thái rõ ràng:
+`SUCCESS`, `FAILED`, `INVALID_OBJECT`, `INVALID_ZONE`, `PLANNING_FAILED` hoặc
+`EXECUTION_FAILED`. Chương trình dừng ngay khi một bước lập kế hoạch hay thực
+thi thất bại.
+
+Biên dịch hai package của Milestone 2 và 3:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select ur3_llm_control ur3_robot_skills
+source install/setup.bash
+```
+
+Khởi động toàn bộ mô phỏng và chạy tự động chuỗi
+`home → move_above(red_cube) → pick(red_cube) → place(red_cube, zone_b)`:
+
+```bash
+ros2 launch ur3_robot_skills robot_skills.launch.py
+```
+
+Khi hoàn thành, terminal hiển thị:
+
+```text
+MILESTONE 3 SUCCESS: red_cube was placed in zone_b
 ```

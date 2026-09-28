@@ -35,10 +35,28 @@ def _spawn_scene(context):
                     box.name,
                     '-allow_renaming',
                     'false',
+                    '-x',
+                    str(box.pose[0]),
+                    '-y',
+                    str(box.pose[1]),
+                    '-z',
+                    str(box.pose[2]),
+                    '-R',
+                    str(box.pose[3]),
+                    '-P',
+                    str(box.pose[4]),
+                    '-Y',
+                    str(box.pose[5]),
                 ],
             )
         )
-    return [TimerAction(period=2.0, actions=spawn_nodes)]
+    # ros_gz_sim/create applies its initial_pose over the pose embedded in SDF.
+    # Spawn the table first and give Gazebo time to register its collision
+    # geometry before releasing the dynamic cubes.
+    return [
+        TimerAction(period=2.0, actions=[spawn_nodes[0]]),
+        TimerAction(period=3.0, actions=spawn_nodes[1:]),
+    ]
 
 
 def generate_launch_description():

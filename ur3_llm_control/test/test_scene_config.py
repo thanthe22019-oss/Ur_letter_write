@@ -46,3 +46,6 @@ def test_cubes_rest_on_table_surface(scene):
     for cube in scene.objects.values():
         cube_bottom = cube.pose[2] - cube.size[2] / 2.0
         assert cube_bottom == pytest.approx(table_surface)
+    for zone in scene.zones.values():
+        zone_top = zone.pose[2] + zone.size[2] / 2.0
+        assert zone_top == pytest.approx(table_surface)

@@ -1,0 +1,16 @@
+string skill
+string object_name
+string zone_name
+---
+uint8 SUCCESS=0
+uint8 FAILED=1
+uint8 INVALID_OBJECT=2
+uint8 INVALID_ZONE=3
+uint8 PLANNING_FAILED=4
+uint8 EXECUTION_FAILED=5
+uint8 INVALID_SKILL=6
+uint8 code
+string status
+string message
+---
+string phase
