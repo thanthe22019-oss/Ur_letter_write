@@ -62,13 +62,22 @@ def test_target_zones_form_an_even_row(scene):
     assert zone_b[1] - zone_c[1] == pytest.approx(0.12)
 
 
-def test_cubes_form_an_even_reachable_row(scene):
-    """Cubes stay aligned, separated, and away from the y=0 collision plane."""
-    red = scene.objects['red_cube'].pose
-    yellow = scene.objects['yellow_cube'].pose
-    blue = scene.objects['blue_cube'].pose
-    assert red[1] == pytest.approx(yellow[1])
-    assert yellow[1] == pytest.approx(blue[1])
-    assert red[1] > 0.0
-    assert yellow[0] - red[0] == pytest.approx(0.10)
-    assert blue[0] - yellow[0] == pytest.approx(0.10)
+def test_each_cube_faces_its_matching_zone(scene):
+    """Each coloured cube must stay opposite its matching coloured zone."""
+    pairs = (
+        ('red_cube', 'zone_a'),
+        ('yellow_cube', 'zone_b'),
+        ('blue_cube', 'zone_c'),
+    )
+    row_x = None
+    separation = None
+    for cube_name, zone_name in pairs:
+        cube = scene.objects[cube_name].pose
+        zone = scene.zones[zone_name].pose
+        if row_x is None:
+            row_x = cube[0]
+            separation = zone[0] - cube[0]
+        assert cube[0] == pytest.approx(row_x)
+        assert cube[1] == pytest.approx(zone[1])
+        assert zone[0] - cube[0] == pytest.approx(separation)
+        assert separation > 0.0

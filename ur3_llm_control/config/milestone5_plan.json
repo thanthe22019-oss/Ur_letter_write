@@ -1,0 +1,16 @@
+{
+  "plan": [
+    {
+      "skill": "pick",
+      "object": "red_cube"
+    },
+    {
+      "skill": "place",
+      "object": "red_cube",
+      "zone": "zone_a"
+    },
+    {
+      "skill": "home"
+    }
+  ]
+}

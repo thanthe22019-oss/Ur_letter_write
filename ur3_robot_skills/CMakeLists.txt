@@ -54,6 +54,10 @@ install(TARGETS robot_skill_server robot_skill_demo
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS scripts/execute_plan
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY action config launch
   DESTINATION share/${PROJECT_NAME}
 )

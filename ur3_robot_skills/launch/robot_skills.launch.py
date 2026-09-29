@@ -106,7 +106,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 'demo_zone',
-                default_value='zone_b',
+                default_value='zone_a',
                 choices=['zone_a', 'zone_b', 'zone_c'],
             ),
             DeclareLaunchArgument(

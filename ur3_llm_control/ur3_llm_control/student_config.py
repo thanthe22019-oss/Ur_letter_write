@@ -54,3 +54,49 @@ def load_student_config(path: str) -> StudentConfig:
         raise ValueError('student.name must be a non-empty string')
     permutation_index, mapping = mapping_for_student_id(student_id)
     return StudentConfig(name.strip(), student_id, permutation_index, mapping)
+
+
+def single_pick_place_plan(
+    config: StudentConfig,
+    object_name: str,
+) -> Dict[str, object]:
+    """Build one pick/place/home plan from the student's computed mapping."""
+    matching_zones = [
+        zone
+        for zone, mapped_object in config.zone_to_object.items()
+        if mapped_object == object_name
+    ]
+    if len(matching_zones) != 1:
+        raise ValueError(
+            f"object '{object_name}' is not uniquely mapped for "
+            f"student {config.student_id}"
+        )
+    zone_name = matching_zones[0]
+    return {
+        'plan': [
+            {'skill': 'pick', 'object': object_name},
+            {
+                'skill': 'place',
+                'object': object_name,
+                'zone': zone_name,
+            },
+            {'skill': 'home'},
+        ],
+    }
+
+
+def student_arrangement_plan(config: StudentConfig) -> Dict[str, object]:
+    """Build the complete arrangement, returning home after every placement."""
+    steps = []
+    for zone_name in ZONES:
+        object_name = config.zone_to_object[zone_name]
+        steps.extend([
+            {'skill': 'pick', 'object': object_name},
+            {
+                'skill': 'place',
+                'object': object_name,
+                'zone': zone_name,
+            },
+            {'skill': 'home'},
+        ])
+    return {'plan': steps}

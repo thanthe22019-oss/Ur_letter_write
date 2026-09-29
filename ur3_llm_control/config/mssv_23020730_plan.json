@@ -1,0 +1,40 @@
+{
+  "plan": [
+    {
+      "skill": "pick",
+      "object": "red_cube"
+    },
+    {
+      "skill": "place",
+      "object": "red_cube",
+      "zone": "zone_a"
+    },
+    {
+      "skill": "home"
+    },
+    {
+      "skill": "pick",
+      "object": "yellow_cube"
+    },
+    {
+      "skill": "place",
+      "object": "yellow_cube",
+      "zone": "zone_b"
+    },
+    {
+      "skill": "home"
+    },
+    {
+      "skill": "pick",
+      "object": "blue_cube"
+    },
+    {
+      "skill": "place",
+      "object": "blue_cube",
+      "zone": "zone_c"
+    },
+    {
+      "skill": "home"
+    }
+  ]
+}

@@ -5,3 +5,9 @@
 __pycache__/
 .pytest_cache/
 *.py[cod]
+.env
+.env.*
+!.env.example
+*.rar
+/log.ini
+/GHI_CHU_TIEP_TUC.md

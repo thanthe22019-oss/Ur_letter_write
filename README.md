@@ -1,90 +1,108 @@
-# Bài thực hành UR3e với ROS 2 và MoveIt 2
+# Điều khiển UR3e bằng LLM và MoveIt 2
 
-Repository hiện gồm ba nội dung:
+Project ROS 2 mô phỏng UR3e trong Gazebo, nhận câu lệnh tự nhiên qua Gemini,
+chuyển câu lệnh thành JSON plan đã giới hạn, kiểm tra plan rồi thực thi bằng
+MoveIt 2. Bài được cá nhân hóa theo MSSV `23020730`.
 
-- `ur_letter_writer`: điều khiển UR3e vẽ chữ D bằng MoveIt 2;
-- `ur3_llm_control`: môi trường bàn, ba cube và ba vùng đích để phát triển
-  điều khiển robot bằng ngôn ngữ tự nhiên;
-- `ur3_robot_skills`: các kỹ năng MoveIt 2 có kiểm tra va chạm để robot về
-  home, tiếp cận, gắp và đặt cube.
+## Chức năng chính
 
-## Bài vẽ chữ D
+- tạo scene gồm bàn, ba khối màu và ba vùng đích;
+- hỗ trợ các skill `pick`, `place` và `home` qua ROS 2 Action;
+- chỉ cho phép LLM sinh plan mức cao, không cho LLM gửi góc khớp hoặc trajectory;
+- kiểm tra object, zone và thứ tự skill trước khi robot chuyển động;
+- đưa robot về `home` sau mỗi cặp gắp/thả để hạn chế đổi nhánh IK và quay cổ tay;
+- chọn nghiệm IK theo cả pose gắp và vùng thả kế tiếp để tránh chuyển động gần 360°.
 
-Package ROS 2 Humble này sử dụng MoveIt 2 để điều khiển khung `tool0` của
-robot UR3 hoặc UR3e mô phỏng vẽ chữ **D**.
+Ánh xạ cá nhân hóa:
 
-Chữ D được tạo bởi hai nét trong mặt phẳng YZ thẳng đứng:
+| Vật | Vùng đích |
+|---|---|
+| `red_cube` | `zone_a` |
+| `yellow_cube` | `zone_b` |
+| `blue_cube` | `zone_c` |
 
-1. Nét thẳng đứng từ trên xuống dưới.
-2. Nét cong nửa elip từ đầu trên đến đầu dưới của nét thẳng.
+## Yêu cầu
 
-Giữa hai nét, đầu công tác được nâng khỏi mặt phẳng vẽ trước khi chuyển sang
-vị trí mới. Các Marker màu xanh lá biểu diễn quỹ đạo dự kiến và Marker màu
-cam biểu diễn quỹ đạo thực tế của `tool0`.
+- Ubuntu 22.04 và ROS 2 Humble;
+- Universal Robots ROS 2 Gazebo Simulation;
+- MoveIt 2 và `ros2_control`;
+- Python package `google-genai` nếu chạy với Gemini API.
 
 ## Biên dịch
 
-Chạy tại thư mục gốc của repository:
-
 ```bash
+cd ~/Interaction/Universal_Robots_ROS2_GZ_Simulation
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select ur_simulation_gz ur_letter_writer
+
+python3 -m pip install --user google-genai
+colcon build --symlink-install \
+  --packages-select ur3_llm_control ur3_robot_skills
 source install/setup.bash
 ```
 
-## Chạy chương trình
+## Chạy toàn bộ
 
-Lệnh dưới đây khởi động UR3e, Gazebo, MoveIt, RViz và node vẽ chữ D:
-
-```bash
-ros2 launch ur_letter_writer write_letter_d.launch.py
-```
-
-## Môi trường điều khiển bằng ngôn ngữ tự nhiên
-
-Milestone 2 tạo một bàn thao tác, `red_cube`, `yellow_cube`, `blue_cube` và
-ba vùng `zone_a`, `zone_b`, `zone_c`. Gazebo và MoveIt Planning Scene cùng
-đọc pose, kích thước và màu sắc từ `ur3_llm_control/config/scene.yaml`.
-
-Biên dịch package:
+Tạo API key tại [Google AI Studio](https://aistudio.google.com/app/apikey), sau
+đó nhập key ẩn trong terminal:
 
 ```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select ur_simulation_gz ur3_llm_control
-source install/setup.bash
+read -rsp "Nhập Gemini API key: " GEMINI_API_KEY
+echo
+export GEMINI_API_KEY
 ```
 
-Khởi động toàn bộ UR3e, Gazebo, MoveIt, RViz và scene:
+Lệnh dưới đây khởi động Gazebo, MoveIt, RViz, scene, robot skill server, gọi
+Gemini, validate plan và thực thi toàn bộ chuỗi cá nhân hóa:
 
 ```bash
-ros2 launch ur3_llm_control llm_robot.launch.py
+ros2 launch ur3_robot_skills end_to_end.launch.py \
+  command:='Sắp xếp tất cả các khối theo mã sinh viên của tôi.'
 ```
 
-## Milestone 3: kỹ năng gắp và đặt
-
-Package `ur3_robot_skills` cung cấp action `/execute_skill` với các kỹ năng
-`home`, `move_above`, `pick` và `place`. Mỗi kỹ năng trả về trạng thái rõ ràng:
-`SUCCESS`, `FAILED`, `INVALID_OBJECT`, `INVALID_ZONE`, `PLANNING_FAILED` hoặc
-`EXECUTION_FAILED`. Chương trình dừng ngay khi một bước lập kế hoạch hay thực
-thi thất bại.
-
-Biên dịch hai package của Milestone 2 và 3:
-
-```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select ur3_llm_control ur3_robot_skills
-source install/setup.bash
-```
-
-Khởi động toàn bộ mô phỏng và chạy tự động chuỗi
-`home → move_above(red_cube) → pick(red_cube) → place(red_cube, zone_b)`:
-
-```bash
-ros2 launch ur3_robot_skills robot_skills.launch.py
-```
-
-Khi hoàn thành, terminal hiển thị:
+Khi chạy thành công, terminal kết thúc bằng:
 
 ```text
-MILESTONE 3 SUCCESS: red_cube was placed in zone_b
+TASK SUCCESS
 ```
+
+Không ghi API key vào README, YAML, launch file hoặc source code. Nếu chỉ cần
+kiểm tra pipeline offline, thêm `planner:=mock` vào lệnh chạy tổng.
+
+## Luồng xử lý
+
+```text
+Câu lệnh tự nhiên
+  -> Gemini / Mock planner
+  -> JSON plan
+  -> Plan Validator
+  -> Skill Executor
+  -> ROS 2 Action /execute_skill
+  -> MoveIt 2
+  -> joint_trajectory_controller
+  -> UR3e trong Gazebo
+```
+
+MoveIt 2 chịu trách nhiệm tính IK, kiểm tra collision, giới hạn khớp và tạo
+trajectory. Cube được attach/detach trong Planning Scene và chỉ đồng bộ pose
+cuối sang Gazebo sau khi thả.
+
+## Cấu trúc chính
+
+```text
+ur3_llm_control/       Planner, validator, scene và cấu hình MSSV
+ur3_robot_skills/      Action server, MoveIt skills và launch tổng
+```
+
+Chi tiết từng thành phần nằm tại
+[`ur3_llm_control/README.md`](ur3_llm_control/README.md) và
+[`ur3_robot_skills/README.md`](ur3_robot_skills/README.md).
+
+## Kiểm thử
+
+```bash
+colcon test --packages-select ur3_llm_control ur3_robot_skills
+colcon test-result --verbose
+```
+
+Phiên bản hiện tại đã vượt qua `88/88` test và đã chạy thành công chuỗi
+`red_cube -> zone_a`, `yellow_cube -> zone_b`, `blue_cube -> zone_c`.

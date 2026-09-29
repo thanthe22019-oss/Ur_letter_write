@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Plan, validate, and execute UR3 robot skills through a ROS 2 action."""
+
+import argparse
+import os
+from pathlib import Path
+import sys
+
+from ament_index_python.packages import get_package_share_directory
+import rclpy
+from action_msgs.msg import GoalStatus
+from rclpy.action import ActionClient
+from rclpy.node import Node
+
+from ur3_llm_control.gemini_planner import (
+    DEFAULT_MODEL as DEFAULT_GEMINI_MODEL,
+    GeminiPlanner,
+)
+from ur3_llm_control.llm_planner import MockLLMPlanner, PlannerError
+from ur3_llm_control.openai_planner import OpenAIPlanner
+from ur3_llm_control.robot_skills import request_from_plan_step
+from ur3_llm_control.skill_executor import SkillResult, execute_validated_plan
+from ur3_llm_control.student_config import load_student_config
+from ur3_llm_control.task_validator import (
+    PlanValidationError,
+    parse_and_validate_plan,
+)
+from ur3_robot_skills.action import ExecuteSkill
+
+
+class RobotSkillClient(Node):
+    """Translate canonical plan steps into ExecuteSkill action goals."""
+
+    def __init__(self, step_timeout_seconds):
+        super().__init__('skill_executor')
+        self._client = ActionClient(self, ExecuteSkill, 'execute_skill')
+        self._step_timeout_seconds = step_timeout_seconds
+        self._zone_lookahead = []
+        self._step_index = 0
+
+    def configure_plan(self, plan):
+        """Cache each pick's validated following place zone for IK scoring."""
+        self._zone_lookahead = [''] * len(plan)
+        for index, step in enumerate(plan[:-1]):
+            following = plan[index + 1]
+            if (
+                step.skill == 'pick'
+                and following.skill == 'place'
+                and following.object_name == step.object_name
+            ):
+                self._zone_lookahead[index] = following.zone_name or ''
+        self._step_index = 0
+
+    def wait_for_server(self, timeout_seconds):
+        """Wait until the robot skill action server is ready."""
+        return self._client.wait_for_server(timeout_sec=timeout_seconds)
+
+    def run_skill(self, step):
+        """Send one validated step and wait for its terminal result."""
+        request = request_from_plan_step(step)
+        goal = ExecuteSkill.Goal()
+        goal.skill = request.skill
+        goal.object_name = request.object_name
+        goal.zone_name = request.zone_name
+        if (
+            request.skill == 'pick'
+            and self._step_index < len(self._zone_lookahead)
+        ):
+            goal.zone_name = self._zone_lookahead[self._step_index]
+        self._step_index += 1
+
+        send_future = self._client.send_goal_async(
+            goal,
+            feedback_callback=self._feedback_callback,
+        )
+        rclpy.spin_until_future_complete(
+            self,
+            send_future,
+            timeout_sec=self._step_timeout_seconds,
+        )
+        if not send_future.done():
+            return SkillResult(-1, 'GOAL_TIMEOUT', 'timed out sending goal')
+
+        try:
+            goal_handle = send_future.result()
+        except Exception as error:
+            return SkillResult(-1, 'ACTION_ERROR', str(error))
+        if goal_handle is None or not goal_handle.accepted:
+            return SkillResult(-1, 'GOAL_REJECTED', 'skill server rejected goal')
+
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(
+            self,
+            result_future,
+            timeout_sec=self._step_timeout_seconds,
+        )
+        if not result_future.done():
+            goal_handle.cancel_goal_async()
+            return SkillResult(
+                -1,
+                'RESULT_TIMEOUT',
+                f'no result after {self._step_timeout_seconds:.1f} seconds',
+            )
+
+        try:
+            wrapped_result = result_future.result()
+        except Exception as error:
+            return SkillResult(-1, 'ACTION_ERROR', str(error))
+        if wrapped_result is None:
+            return SkillResult(-1, 'ACTION_ERROR', 'empty action result')
+        if wrapped_result.status != GoalStatus.STATUS_SUCCEEDED:
+            return SkillResult(
+                -1,
+                'ACTION_FAILED',
+                f'action goal ended with status {wrapped_result.status}',
+            )
+
+        result = wrapped_result.result
+        return SkillResult(
+            code=int(result.code),
+            status=result.status,
+            message=result.message,
+        )
+
+    def _feedback_callback(self, feedback_message):
+        phase = feedback_message.feedback.phase
+        self.get_logger().info(f'  phase: {phase}')
+
+
+def _default_student_config():
+    return (
+        Path(get_package_share_directory('ur3_llm_control'))
+        / 'config'
+        / 'student_config.yaml'
+    )
+
+
+def _parse_bool(value):
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off'}:
+        return False
+    raise argparse.ArgumentTypeError('expected true or false')
+
+
+def _parse_arguments(arguments):
+    parser = argparse.ArgumentParser(
+        description='Plan, validate, and execute UR3 robot skills.'
+    )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--json', help='raw JSON plan')
+    source.add_argument('--file', type=Path, help='path to a JSON plan')
+    source.add_argument('--command', help='natural-language robot command')
+    parser.add_argument(
+        '--planner',
+        choices=['gemini', 'openai', 'mock'],
+        default='gemini',
+        help='planner used with --command',
+    )
+    parser.add_argument(
+        '--model',
+        default=None,
+        help='provider model; defaults to GEMINI_MODEL or OPENAI_MODEL',
+    )
+    parser.add_argument(
+        '--api-timeout-seconds',
+        '--openai-timeout-seconds',
+        dest='api_timeout_seconds',
+        type=float,
+        default=30.0,
+    )
+    parser.add_argument(
+        '--fallback-to-mock',
+        type=_parse_bool,
+        default=False,
+    )
+    parser.add_argument(
+        '--student-config',
+        type=Path,
+        default=_default_student_config(),
+    )
+    parser.add_argument('--server-wait-seconds', type=float, default=120.0)
+    parser.add_argument('--step-timeout-seconds', type=float, default=240.0)
+    return parser.parse_known_args(arguments)
+
+
+def _generate_command_plan(options):
+    config = load_student_config(str(options.student_config))
+    mock = MockLLMPlanner(config)
+    fallback = mock if options.fallback_to_mock else None
+    if options.planner == 'mock':
+        planner = mock
+    elif options.planner == 'gemini':
+        planner = GeminiPlanner(
+            model=(
+                options.model
+                or os.environ.get('GEMINI_MODEL', DEFAULT_GEMINI_MODEL)
+            ),
+            timeout_seconds=options.api_timeout_seconds,
+            fallback=fallback,
+        )
+    else:
+        planner = OpenAIPlanner(
+            model=(
+                options.model
+                or os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+            ),
+            timeout_seconds=options.api_timeout_seconds,
+            fallback=fallback,
+        )
+    return planner.generate_plan(options.command)
+
+
+def _print_step(execution):
+    label = execution.step.label()
+    dots = '.' * max(2, 40 - len(label))
+    print(f'{label} {dots} {execution.result.status}', flush=True)
+    if execution.result.message:
+        print(f'  {execution.result.message}', flush=True)
+
+
+def main(arguments=None):
+    """Create or load a plan, validate it, then execute every skill."""
+    cli_arguments = sys.argv[1:] if arguments is None else arguments
+    options, ros_arguments = _parse_arguments(cli_arguments)
+    try:
+        if options.command is not None:
+            print('USER COMMAND:')
+            print(options.command)
+            raw_json = _generate_command_plan(options)
+            print('\nLLM PLAN:')
+            print(raw_json)
+        else:
+            raw_json = (
+                options.file.read_text(encoding='utf-8')
+                if options.file is not None
+                else options.json
+            )
+        plan = parse_and_validate_plan(raw_json)
+    except (OSError, PlannerError, PlanValidationError) as error:
+        print('\nPLANNING/VALIDATION: REJECTED')
+        print(error)
+        print('\nTASK FAILED')
+        return 2
+
+    print('\nVALIDATION: SUCCESS')
+    print('\nPLAN:')
+    for index, step in enumerate(plan, start=1):
+        print(f'{index}. {step.label()}')
+
+    rclpy.init(args=ros_arguments)
+    client = RobotSkillClient(options.step_timeout_seconds)
+    try:
+        print('\nEXECUTION:', flush=True)
+        if not client.wait_for_server(options.server_wait_seconds):
+            print('execute_skill action server .......... SERVER_UNAVAILABLE')
+            print('\nTASK FAILED')
+            return 1
+
+        client.configure_plan(plan)
+        report = execute_validated_plan(
+            plan,
+            client.run_skill,
+            _print_step,
+        )
+        print('\nTASK SUCCESS' if report.succeeded else '\nTASK FAILED')
+        return 0 if report.succeeded else 1
+    finally:
+        client.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

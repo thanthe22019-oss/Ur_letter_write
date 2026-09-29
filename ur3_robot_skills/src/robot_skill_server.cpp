@@ -78,6 +78,10 @@ struct Settings
   std::vector<std::string> valid_zones;
   std::map<std::string, Zone> zones;
   std::vector<double> tool_orientation;
+  std::vector<double> place_orientation;
+  std::map<std::string, std::vector<double>> object_orientations;
+  std::map<std::string, double> object_transfer_clearances;
+  std::map<std::string, double> object_transfer_y_offsets;
   double controller_wait_seconds;
   double approach_height;
   double transfer_clearance;
@@ -93,6 +97,7 @@ struct Settings
   double minimum_path_fraction;
   double max_joint_step;
   double max_joint_travel;
+  double max_wrist_joint_travel;
   double scene_wait_seconds;
   int gazebo_service_timeout_ms;
 };
@@ -140,6 +145,8 @@ Settings loadSettings(const rclcpp::Node::SharedPtr& node)
   settings.valid_zones = parameter<std::vector<std::string>>(node, "valid_zones", {});
   settings.tool_orientation = parameter<std::vector<double>>(
     node, "tool_orientation", {1.0, 0.0, 0.0, 0.0});
+  settings.place_orientation = parameter<std::vector<double>>(
+    node, "place_orientation", settings.tool_orientation);
   settings.controller_wait_seconds = parameter<double>(node, "controller_wait_seconds", 90.0);
   settings.approach_height = parameter<double>(node, "approach_height", 0.12);
   settings.transfer_clearance = parameter<double>(node, "transfer_clearance", 0.05);
@@ -154,26 +161,60 @@ Settings loadSettings(const rclcpp::Node::SharedPtr& node)
   settings.cartesian_step = parameter<double>(node, "cartesian_step", 0.005);
   settings.minimum_path_fraction = parameter<double>(node, "minimum_path_fraction", 0.995);
   settings.max_joint_step = parameter<double>(node, "max_joint_step", 0.35);
-  settings.max_joint_travel = parameter<double>(node, "max_joint_travel", 5.5);
+  settings.max_joint_travel = parameter<double>(node, "max_joint_travel", 4.0);
+  settings.max_wrist_joint_travel = parameter<double>(
+    node, "max_wrist_joint_travel", 3.2);
   settings.scene_wait_seconds = parameter<double>(node, "scene_wait_seconds", 30.0);
   settings.gazebo_service_timeout_ms = parameter<int>(node, "gazebo_service_timeout_ms", 3000);
 
   if (settings.valid_objects.empty() || settings.valid_zones.empty()) {
     throw std::invalid_argument("valid_objects and valid_zones must come from scene.yaml");
   }
-  if (settings.tool_orientation.size() != 4) {
-    throw std::invalid_argument("tool_orientation must contain [x, y, z, w]");
-  }
-  double quaternion_norm = 0.0;
-  for (const double value : settings.tool_orientation) {
-    quaternion_norm += value * value;
-  }
-  quaternion_norm = std::sqrt(quaternion_norm);
-  if (quaternion_norm < 1.0e-9) {
-    throw std::invalid_argument("tool_orientation must not be zero");
-  }
-  for (double& value : settings.tool_orientation) {
-    value /= quaternion_norm;
+  const auto normalize_orientation = [](
+    std::vector<double>& orientation, const std::string& parameter_name)
+    {
+      if (orientation.size() != 4) {
+        throw std::invalid_argument(
+                parameter_name + " must contain [x, y, z, w]");
+      }
+      double quaternion_norm = 0.0;
+      for (const double value : orientation) {
+        quaternion_norm += value * value;
+      }
+      quaternion_norm = std::sqrt(quaternion_norm);
+      if (quaternion_norm < 1.0e-9) {
+        throw std::invalid_argument(parameter_name + " must not be zero");
+      }
+      for (double& value : orientation) {
+        value /= quaternion_norm;
+      }
+    };
+  normalize_orientation(settings.tool_orientation, "tool_orientation");
+  normalize_orientation(settings.place_orientation, "place_orientation");
+  for (const auto& object_name : settings.valid_objects) {
+    auto orientation = parameter<std::vector<double>>(
+      node, "object_orientations." + object_name, settings.tool_orientation);
+    normalize_orientation(
+      orientation, "object_orientations." + object_name);
+    settings.object_orientations.emplace(object_name, std::move(orientation));
+    const double transfer_clearance = parameter<double>(
+      node, "object_transfer_clearances." + object_name,
+      settings.transfer_clearance);
+    if (transfer_clearance < 0.0) {
+      throw std::invalid_argument(
+              "object_transfer_clearances." + object_name +
+              " must be non-negative");
+    }
+    settings.object_transfer_clearances.emplace(
+      object_name, transfer_clearance);
+    const double transfer_y_offset = parameter<double>(
+      node, "object_transfer_y_offsets." + object_name, 0.0);
+    if (std::abs(transfer_y_offset) > 0.20) {
+      throw std::invalid_argument(
+              "object_transfer_y_offsets." + object_name +
+              " must be between -0.20 and 0.20 m");
+    }
+    settings.object_transfer_y_offsets.emplace(object_name, transfer_y_offset);
   }
 
   if (settings.controller_wait_seconds <= 0.0 || settings.approach_height <= 0.0 ||
@@ -183,7 +224,9 @@ Settings loadSettings(const rclcpp::Node::SharedPtr& node)
       settings.ik_attempts < 1 || settings.ik_timeout <= 0.0 ||
       settings.cartesian_step <= 0.0 || settings.minimum_path_fraction <= 0.0 ||
       settings.minimum_path_fraction > 1.0 || settings.max_joint_step <= 0.0 ||
-      settings.max_joint_travel <= 0.0 || settings.scene_wait_seconds <= 0.0 ||
+      settings.max_joint_travel <= 0.0 ||
+      settings.max_wrist_joint_travel <= 0.0 ||
+      settings.scene_wait_seconds <= 0.0 ||
       settings.gazebo_service_timeout_ms <= 0) {
     throw std::invalid_argument("invalid motion setting");
   }
@@ -299,6 +342,10 @@ public:
       RCLCPP_ERROR(node_->get_logger(), "Robot joint state was not available");
       return false;
     }
+    initial_robot_state_ =
+      std::make_shared<moveit::core::RobotState>(*move_group_.getCurrentState(5.0));
+    RCLCPP_INFO(
+      node_->get_logger(), "Captured initial robot state at startup as home baseline");
     if (!compute_ik_client_->wait_for_service(30s)) {
       RCLCPP_ERROR(node_->get_logger(), "MoveIt /compute_ik service was not available");
       return false;
@@ -330,7 +377,7 @@ public:
       return moveAbove(goal.object_name, feedback);
     }
     if (goal.skill == "pick") {
-      return pick(goal.object_name, feedback);
+      return pick(goal.object_name, goal.zone_name, feedback);
     }
     if (goal.skill == "place") {
       return place(goal.object_name, goal.zone_name, feedback);
@@ -339,6 +386,39 @@ public:
   }
 
 private:
+  void shiftToNearestEquivalent(
+    moveit::core::RobotState& target_state,
+    const moveit::core::RobotState& reference_state,
+    const moveit::core::JointModelGroup* joint_group) const
+  {
+    // UR joints are bounded revolute joints whose equivalent angles can differ
+    // by whole turns. Keep the requested pose while choosing the numeric joint
+    // representation closest to the measured state.
+    const double full_turn = 2.0 * std::acos(-1.0);
+    for (const auto& variable_name : joint_group->getVariableNames()) {
+      const double target = target_state.getVariablePosition(variable_name);
+      const double measured = reference_state.getVariablePosition(variable_name);
+      const auto& bounds =
+        target_state.getRobotModel()->getVariableBounds(variable_name);
+      double nearest = target;
+      double nearest_distance = std::abs(target - measured);
+      for (int turns = -2; turns <= 2; ++turns) {
+        const double shifted = target + turns * full_turn;
+        if (bounds.position_bounded_ &&
+            (shifted < bounds.min_position_ || shifted > bounds.max_position_)) {
+          continue;
+        }
+        const double distance = std::abs(shifted - measured);
+        if (distance < nearest_distance) {
+          nearest = shifted;
+          nearest_distance = distance;
+        }
+      }
+      target_state.setVariablePosition(variable_name, nearest);
+    }
+    target_state.update();
+  }
+
   SkillResult home(const Feedback& feedback)
   {
     feedback("planning home");
@@ -346,10 +426,32 @@ private:
     if (!current) {
       return {Status::FAILED, "current robot state is unavailable"};
     }
-    move_group_.setStartState(*current);
-    if (!move_group_.setNamedTarget(settings_.home_target)) {
-      move_group_.setStartStateToCurrentState();
+    const auto* joint_group =
+      move_group_.getRobotModel()->getJointModelGroup(settings_.planning_group);
+    if (!joint_group) {
+      return {Status::FAILED, "MoveIt planning group is unavailable"};
+    }
+
+    moveit::core::RobotState target(*current);
+    if (!target.setToDefaultValues(joint_group, settings_.home_target)) {
       return {Status::PLANNING_FAILED, "MoveIt does not define the home target"};
+    }
+    // A UR joint pose is physically unchanged by a whole turn. The named
+    // state can therefore be represented almost 2*pi away from the measured
+    // wrist angle after placing a cube. Select the in-bounds representation
+    // nearest to the current joints before planning home.
+    shiftToNearestEquivalent(target, *current, joint_group);
+    if (!target.satisfiesBounds(joint_group)) {
+      return {Status::PLANNING_FAILED, "home target violates joint bounds"};
+    }
+
+    RCLCPP_INFO(
+      node_->get_logger(), "Nearest-equivalent home target distance: %.3f rad",
+      current->distance(target, joint_group));
+    move_group_.setStartState(*current);
+    if (!move_group_.setJointValueTarget(target)) {
+      move_group_.setStartStateToCurrentState();
+      return {Status::PLANNING_FAILED, "MoveIt rejected the nearest home target"};
     }
     auto result = planCurrentTarget("home", *current, feedback);
     move_group_.setStartStateToCurrentState();
@@ -362,20 +464,27 @@ private:
       return {Status::INVALID_OBJECT, "unknown object '" + object_name + "'"};
     }
     if (!held_object_.empty() && held_object_ == object_name && held_info_) {
-      return moveToPose(
+      return moveToPoseGoal(
         abovePoseForObject(*held_info_), "move above held " + object_name, feedback);
     }
     auto object = findWorldObject(object_name);
     if (!object) {
       return {Status::FAILED, "object '" + object_name + "' is absent from MoveIt"};
     }
-    return moveToPose(abovePoseForObject(*object), "move above " + object_name, feedback);
+    return moveToPoseGoal(
+      abovePoseForObject(*object), "move above " + object_name, feedback);
   }
 
-  SkillResult pick(const std::string& object_name, const Feedback& feedback)
+  SkillResult pick(
+    const std::string& object_name, const std::string& preferred_zone,
+    const Feedback& feedback)
   {
     if (!contains(settings_.valid_objects, object_name)) {
       return {Status::INVALID_OBJECT, "unknown object '" + object_name + "'"};
+    }
+    if (!preferred_zone.empty() &&
+        !contains(settings_.valid_zones, preferred_zone)) {
+      return {Status::INVALID_ZONE, "unknown zone '" + preferred_zone + "'"};
     }
     if (!held_object_.empty()) {
       return {Status::FAILED, "already holding '" + held_object_ + "'"};
@@ -385,8 +494,22 @@ private:
       return {Status::FAILED, "object '" + object_name + "' is absent from MoveIt"};
     }
 
+    const auto approach_pose = abovePoseForObject(*object);
     auto result = moveToPose(
-      abovePoseForObject(*object), "pick approach for " + object_name, feedback);
+      approach_pose, "pick approach for " + object_name, feedback, &*object,
+      preferred_zone);
+    if (!result.ok() && !preferred_zone.empty()) {
+      return result;
+    }
+    if (!result.ok()) {
+      RCLCPP_WARN(
+        node_->get_logger(),
+        "Nearest-IK pick approach failed; trying a sampled pose goal");
+      result = moveToPoseGoal(
+        approach_pose,
+        "pick approach for " + object_name + " pose fallback",
+        feedback);
+    }
     if (!result.ok()) {
       return result;
     }
@@ -446,27 +569,96 @@ private:
     // remaining cubes, and a different IK branch. The vertical Cartesian
     // segments keep the tool orientation fixed while OMPL handles only the
     // obstacle-free transfer at the higher plane.
+    const double transfer_clearance =
+      settings_.object_transfer_clearances.at(object_name);
     auto transfer_start_pose = abovePoseForObject(*held_info_);
-    transfer_start_pose.position.z += settings_.transfer_clearance;
+    transfer_start_pose.position.z += transfer_clearance;
     auto transfer_target_pose = above_release_pose;
-    transfer_target_pose.position.z += settings_.transfer_clearance;
+    transfer_target_pose.position.z += transfer_clearance;
 
-    auto result = executeCartesian(
-      transfer_start_pose, "lift to transfer height", feedback);
+    SkillResult result{Status::SUCCESS, ""};
+    bool used_transfer_height = false;
+    if (transfer_clearance > 1.0e-9) {
+      result = executeCartesian(
+        transfer_start_pose, "lift to transfer height", feedback);
+      used_transfer_height = result.ok();
+      if (!used_transfer_height) {
+        RCLCPP_WARN(
+          node_->get_logger(),
+          "Extra transfer lift is unreachable; using the normal approach plane");
+      }
+    }
+    const auto& transfer_goal =
+      used_transfer_height ? transfer_target_pose : above_release_pose;
+
+    // Keep the IK branch used for grasping while carrying the object. The
+    // blue pick/place line crosses a poor UR configuration when followed
+    // directly along X, so an optional Y detour divides that motion into
+    // short Cartesian segments without changing the object or zone pose.
+    const double transfer_y_offset =
+      settings_.object_transfer_y_offsets.at(object_name);
+    if (std::abs(transfer_y_offset) > 1.0e-9) {
+      auto departure_pose = used_transfer_height ?
+        transfer_start_pose : abovePoseForObject(*held_info_);
+      departure_pose.position.y += transfer_y_offset;
+      result = executeCartesian(
+        departure_pose, "Cartesian departure with " + object_name, feedback);
+      if (result.ok()) {
+        auto bypass_pose = transfer_goal;
+        bypass_pose.position.y += transfer_y_offset;
+        result = executeCartesian(
+          bypass_pose, "Cartesian bypass for " + object_name, feedback);
+      }
+      if (result.ok()) {
+        result = executeCartesian(
+          transfer_goal, "Cartesian alignment above " + zone_name, feedback);
+      }
+    } else {
+      result = executeCartesian(
+        transfer_goal, "Cartesian transfer above " + zone_name, feedback);
+    }
+    if (!result.ok()) {
+      RCLCPP_WARN(
+        node_->get_logger(),
+        "Cartesian transfer failed; trying the nearest collision-free IK branch");
+      result = moveToPose(
+        transfer_goal, "transfer above " + zone_name, feedback);
+      if (!result.ok()) {
+        RCLCPP_WARN(
+          node_->get_logger(),
+          "Nearest-IK transfer failed; trying a sampled pose goal");
+        result = moveToPoseGoal(
+          transfer_goal,
+          "transfer above " + zone_name + " pose fallback",
+          feedback);
+      }
+    }
     if (!result.ok()) {
       return result;
     }
 
-    result = moveToPoseGoal(
-      transfer_target_pose, "transfer above " + zone_name, feedback);
-    if (!result.ok()) {
-      return result;
-    }
-
-    result = executeCartesian(
-      above_release_pose, "lower to approach above " + zone_name, feedback);
-    if (!result.ok()) {
-      return result;
+    if (used_transfer_height) {
+      result = executeCartesian(
+        above_release_pose, "lower to approach above " + zone_name, feedback);
+      if (!result.ok()) {
+        RCLCPP_WARN(
+          node_->get_logger(),
+          "Cartesian transfer descent failed; replanning to the same "
+          "approach pose");
+        result = moveToPose(
+          above_release_pose,
+          "replanned approach above " + zone_name,
+          feedback);
+        if (!result.ok()) {
+          result = moveToPoseGoal(
+            above_release_pose,
+            "replanned approach above " + zone_name + " pose fallback",
+            feedback);
+        }
+        if (!result.ok()) {
+          return result;
+        }
+      }
     }
 
     feedback("lowering into " + zone_name);
@@ -510,16 +702,18 @@ private:
       "placed '" + object_name + "' in '" + zone_name + "'"};
   }
 
-  geometry_msgs::msg::Pose toolPose(double x, double y, double z) const
+  geometry_msgs::msg::Pose toolPose(
+    double x, double y, double z,
+    const std::vector<double>& orientation) const
   {
     geometry_msgs::msg::Pose pose;
     pose.position.x = x;
     pose.position.y = y;
     pose.position.z = z;
-    pose.orientation.x = settings_.tool_orientation[0];
-    pose.orientation.y = settings_.tool_orientation[1];
-    pose.orientation.z = settings_.tool_orientation[2];
-    pose.orientation.w = settings_.tool_orientation[3];
+    pose.orientation.x = orientation[0];
+    pose.orientation.y = orientation[1];
+    pose.orientation.z = orientation[2];
+    pose.orientation.w = orientation[3];
     return pose;
   }
 
@@ -527,7 +721,8 @@ private:
   {
     return toolPose(
       object.pose.position.x, object.pose.position.y,
-      object.pose.position.z + object.size[2] / 2.0 + settings_.grasp_clearance);
+      object.pose.position.z + object.size[2] / 2.0 + settings_.grasp_clearance,
+      settings_.object_orientations.at(object.collision.id));
   }
 
   geometry_msgs::msg::Pose abovePoseForObject(const ObjectInfo& object) const
@@ -553,7 +748,8 @@ private:
   {
     return toolPose(
       placed_object_pose.position.x, placed_object_pose.position.y,
-      placed_object_pose.position.z + object.size[2] / 2.0 + settings_.grasp_clearance);
+      placed_object_pose.position.z + object.size[2] / 2.0 + settings_.grasp_clearance,
+      settings_.place_orientation);
   }
 
   std::optional<ObjectInfo> findWorldObject(const std::string& object_name)
@@ -574,7 +770,8 @@ private:
 
   SkillResult moveToPose(
     const geometry_msgs::msg::Pose& target, const std::string& motion_name,
-    const Feedback& feedback)
+    const Feedback& feedback, const ObjectInfo* transfer_object = nullptr,
+    const std::string& preferred_zone = "")
   {
     auto current = move_group_.getCurrentState(5.0);
     if (!current) {
@@ -585,7 +782,8 @@ private:
     // Resolve several IK candidates and keep the one closest to the measured
     // joints. A raw pose constraint can select an equivalent UR solution that
     // is represented almost 2*pi away on a wrist joint.
-    if (!setNearestIKTarget(target, *current)) {
+    if (!setNearestIKTarget(
+        target, *current, transfer_object, preferred_zone)) {
       move_group_.setStartStateToCurrentState();
       return {Status::PLANNING_FAILED, "MoveIt found no IK solution for " + motion_name};
     }
@@ -616,7 +814,9 @@ private:
 
   bool setNearestIKTarget(
     const geometry_msgs::msg::Pose& target,
-    const moveit::core::RobotState& current_state)
+    const moveit::core::RobotState& current_state,
+    const ObjectInfo* transfer_object = nullptr,
+    const std::string& preferred_zone = "")
   {
     const auto* joint_group =
       move_group_.getRobotModel()->getJointModelGroup(settings_.planning_group);
@@ -626,6 +826,8 @@ private:
 
     moveit::core::RobotState best_state(current_state);
     double best_distance = std::numeric_limits<double>::infinity();
+    double best_transfer_travel = std::numeric_limits<double>::infinity();
+    int best_compatible_zones = -1;
     bool found = false;
     for (int attempt = 0; attempt < settings_.ik_attempts; ++attempt) {
       moveit::core::RobotState candidate(current_state);
@@ -641,7 +843,10 @@ private:
       // repeating an empty diff only returns the same, sometimes distant,
       // solution on every attempt.
       moveit::core::RobotState seed_state(current_state);
-      if (attempt > 0) {
+      if (attempt == 1) {
+        seed_state.setToDefaultValues(joint_group, settings_.home_target);
+        seed_state.update();
+      } else if (attempt > 1) {
         seed_state.setToRandomPositions(joint_group);
         seed_state.update();
       }
@@ -676,23 +881,110 @@ private:
         RCLCPP_WARN(node_->get_logger(), "MoveIt returned an invalid IK robot state");
         continue;
       }
-      candidate.harmonizePositions(joint_group);
+      // IK may encode an equivalent wrist pose almost 2*pi away.
+      shiftToNearestEquivalent(candidate, current_state, joint_group);
       if (!candidate.satisfiesBounds(joint_group)) {
         continue;
       }
       const double distance = current_state.distance(candidate, joint_group);
-      if (distance < best_distance) {
+      int compatible_zones = 0;
+      double transfer_travel = 0.0;
+      if (transfer_object) {
+        const auto compatibility = transferCompatibility(
+          candidate, *transfer_object, preferred_zone);
+        compatible_zones = compatibility.first;
+        transfer_travel = compatibility.second;
+      }
+      const bool better_candidate = transfer_object ?
+        (compatible_zones > best_compatible_zones ||
+        (compatible_zones == best_compatible_zones &&
+        (transfer_travel < best_transfer_travel - 1.0e-6 ||
+        (std::abs(transfer_travel - best_transfer_travel) <= 1.0e-6 &&
+        distance < best_distance)))) :
+        distance < best_distance;
+      if (better_candidate) {
         best_state = candidate;
         best_distance = distance;
+        best_transfer_travel = transfer_travel;
+        best_compatible_zones = compatible_zones;
         found = true;
       }
     }
     if (!found) {
       return false;
     }
-    RCLCPP_INFO(
-      node_->get_logger(), "Nearest IK candidate distance: %.3f rad", best_distance);
+    if (transfer_object && !preferred_zone.empty() &&
+        best_compatible_zones < 1) {
+      RCLCPP_WARN(
+        node_->get_logger(),
+        "No sampled IK branch has a joint-safe Cartesian transfer to %s",
+        preferred_zone.c_str());
+      return false;
+    }
+    if (!transfer_object && best_distance > 5.5) {
+      RCLCPP_WARN(
+        node_->get_logger(),
+        "Nearest IK candidate distance %.3f rad exceeds 5.5 rad threshold",
+        best_distance);
+      return false;
+    }
+    if (transfer_object) {
+      RCLCPP_INFO(
+        node_->get_logger(),
+        "Transfer-compatible IK: %d/%zu zones, %.3f rad transfer score, "
+        "%.3f rad approach distance",
+        best_compatible_zones,
+        preferred_zone.empty() ? settings_.valid_zones.size() : 1U,
+        best_transfer_travel, best_distance);
+    } else {
+      RCLCPP_INFO(
+        node_->get_logger(), "Nearest IK candidate distance: %.3f rad", best_distance);
+    }
     return move_group_.setJointValueTarget(best_state);
+  }
+
+  std::pair<int, double> transferCompatibility(
+    const moveit::core::RobotState& approach_state,
+    const ObjectInfo& object, const std::string& preferred_zone)
+  {
+    auto source_transfer_pose = abovePoseForObject(object);
+    source_transfer_pose.position.z +=
+      settings_.object_transfer_clearances.at(object.collision.id);
+
+    int compatible_zones = 0;
+    double worst_transfer_travel = 0.0;
+    const std::vector<std::string> zones_to_check = preferred_zone.empty() ?
+      settings_.valid_zones : std::vector<std::string>{preferred_zone};
+    for (const auto& zone_name : zones_to_check) {
+      const auto& zone = settings_.zones.at(zone_name);
+      const auto object_pose = placedPose(object, zone);
+      auto target_transfer_pose = releaseToolPose(object, object_pose);
+      target_transfer_pose.position.z += settings_.approach_height +
+        settings_.object_transfer_clearances.at(object.collision.id);
+
+      move_group_.setStartState(approach_state);
+      moveit_msgs::msg::RobotTrajectory trajectory;
+      const double fraction = move_group_.computeCartesianPath(
+        {source_transfer_pose, target_transfer_pose}, settings_.cartesian_step,
+        0.0, trajectory, true);
+      if (fraction < settings_.minimum_path_fraction) {
+        continue;
+      }
+      double travel = 0.0;
+      if (!validateTrajectory(
+          approach_state, trajectory,
+          "IK transfer check for " + object.collision.id + " to " + zone_name,
+          false, &travel)) {
+        continue;
+      }
+      ++compatible_zones;
+      worst_transfer_travel = std::max(worst_transfer_travel, travel);
+    }
+    move_group_.setStartStateToCurrentState();
+    if (compatible_zones == 0) {
+      return {0, std::numeric_limits<double>::infinity()};
+    }
+    return {compatible_zones, worst_transfer_travel};
   }
 
   SkillResult planCurrentTarget(
@@ -758,11 +1050,16 @@ private:
         Status::PLANNING_FAILED,
         motion_name + " Cartesian path is incomplete"};
     }
-    if (!validateTrajectory(*start_state, trajectory, motion_name, true, nullptr)) {
+    double total_joint_travel = 0.0;
+    if (!validateTrajectory(
+        *start_state, trajectory, motion_name, true, &total_joint_travel)) {
       return {
         Status::PLANNING_FAILED,
         motion_name + " violates joint safety limits"};
     }
+    RCLCPP_INFO(
+      node_->get_logger(), "%s selected with %.3f rad total joint travel",
+      motion_name.c_str(), total_joint_travel);
     feedback("executing " + motion_name);
     if (!static_cast<bool>(move_group_.execute(trajectory))) {
       return {Status::EXECUTION_FAILED, "controller failed during " + motion_name};
@@ -782,12 +1079,24 @@ private:
     trajectory.unwind(start_state);
     const auto* joint_group =
       move_group_.getRobotModel()->getJointModelGroup(settings_.planning_group);
+    if (!joint_group) {
+      return false;
+    }
+
+    // UR joints are bounded at +/-2*pi, so MoveIt's generic unwind only does
+    // part of the work performed for continuous joints. Normalize every
+    // waypoint against its predecessor to prevent equivalent angles on
+    // opposite numeric branches from creating a long controller rotation.
+    moveit::core::RobotState previous_state(start_state);
     for (std::size_t index = 0; index < trajectory.getWayPointCount(); ++index) {
-      if (!trajectory.getWayPoint(index).satisfiesBounds(joint_group)) {
+      auto& waypoint = *trajectory.getWayPointPtr(index);
+      shiftToNearestEquivalent(waypoint, previous_state, joint_group);
+      if (!waypoint.satisfiesBounds(joint_group)) {
         RCLCPP_ERROR(
           node_->get_logger(), "%s violates a joint limit", motion_name.c_str());
         return false;
       }
+      previous_state = waypoint;
     }
     trajectory.getRobotTrajectoryMsg(trajectory_message);
 
@@ -817,12 +1126,16 @@ private:
           return false;
         }
         travel[index] += step;
-        if (travel[index] > settings_.max_joint_travel) {
+        const bool is_wrist_joint =
+          joint_names[index].find("wrist_") != std::string::npos;
+        const double travel_limit = is_wrist_joint ?
+          settings_.max_wrist_joint_travel : settings_.max_joint_travel;
+        if (travel[index] > travel_limit) {
           RCLCPP_WARN(
             node_->get_logger(),
             "%s rejected: joint %s travel %.3f rad exceeds %.3f rad",
             motion_name.c_str(), joint_names[index].c_str(), travel[index],
-            settings_.max_joint_travel);
+            travel_limit);
           return false;
         }
       }
@@ -911,6 +1224,7 @@ private:
   ignition::transport::Node gazebo_node_;
   std::string held_object_;
   std::optional<ObjectInfo> held_info_;
+  std::shared_ptr<moveit::core::RobotState> initial_robot_state_;
 };
 
 class SkillActionServer

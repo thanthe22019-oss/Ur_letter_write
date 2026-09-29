@@ -3,20 +3,37 @@ robot_skill_server:
     planning_group: ur_manipulator
     base_frame: base_link
     end_effector_link: tool0
-    home_target: home
+    # Initial forward-facing reset pose used by the home skill between tasks.
+    home_target: test_configuration
     controller_action: /joint_trajectory_controller/follow_joint_trajectory
     controller_wait_seconds: 90.0
 
-    # tool0 is kept vertical, with its local +Z axis pointing down.
+    # TCP stays on each cube centre. Only arm orientation changes so the
+    # aligned cube/zone coordinates remain fixed.
     tool_orientation: [0.0, 1.0, 0.0, 0.0]
+    object_orientations:
+      red_cube: [0.0, 1.0, 0.0, 0.0]
+      yellow_cube: [0.0, 0.98480775, -0.17364818, 0.0]
+      blue_cube: [0.0, 0.98480775, 0.17364818, 0.0]
+    place_orientation: [0.0, 1.0, 0.0, 0.0]
     approach_height: 0.12
     transfer_clearance: 0.05
+    object_transfer_clearances:
+      red_cube: 0.05
+      yellow_cube: 0.05
+      blue_cube: 0.05
+    # Optional Y detours operate only at transfer height. Object and zone
+    # coordinates remain unchanged; zero selects the direct route.
+    object_transfer_y_offsets:
+      red_cube: 0.0
+      yellow_cube: 0.0
+      blue_cube: 0.0
     grasp_clearance: 0.015
     place_clearance: 0.003
 
     planning_time: 10.0
     planning_attempts: 6
-    ik_attempts: 8
+    ik_attempts: 16
     # The UR numerical IK plugin may need more than 0.1 s to escape the home
     # singularity and find a collision-free branch.
     ik_timeout: 1.0
@@ -25,6 +42,9 @@ robot_skill_server:
     cartesian_step: 0.005
     minimum_path_fraction: 0.995
     max_joint_step: 0.35
+    # No joint may approach a full revolution in one motion. Wrist joints
+    # use a tighter limit because equivalent IK branches often differ by 2*pi.
     max_joint_travel: 5.5
+    max_wrist_joint_travel: 5.0
     scene_wait_seconds: 30.0
     gazebo_service_timeout_ms: 3000
