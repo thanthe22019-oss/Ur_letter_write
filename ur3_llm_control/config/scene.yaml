@@ -20,13 +20,11 @@ scene:
       size: [0.04, 0.04, 0.04]
       color: [0.90, 0.05, 0.05, 1.0]
     yellow_cube:
-      # Keep the cube away from the robot's centre plane.  A vertical grasp at
-      # y=0 forces every UR3e IK branch through the table with the upper arm.
-      pose: [0.28, 0.12, 0.18, 0.0, 0.0, 0.0]
+      pose: [0.30, 0.12, 0.18, 0.0, 0.0, 0.0]
       size: [0.04, 0.04, 0.04]
       color: [0.95, 0.80, 0.05, 1.0]
     blue_cube:
-      pose: [0.20, -0.12, 0.18, 0.0, 0.0, 0.0]
+      pose: [0.40, 0.12, 0.18, 0.0, 0.0, 0.0]
       size: [0.04, 0.04, 0.04]
       color: [0.05, 0.20, 0.90, 1.0]
 

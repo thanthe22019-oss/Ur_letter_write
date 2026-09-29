@@ -10,6 +10,7 @@ robot_skill_server:
     # tool0 is kept vertical, with its local +Z axis pointing down.
     tool_orientation: [0.0, 1.0, 0.0, 0.0]
     approach_height: 0.12
+    transfer_clearance: 0.05
     grasp_clearance: 0.015
     place_clearance: 0.003
 

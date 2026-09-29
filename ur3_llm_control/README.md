@@ -32,3 +32,15 @@ ros2 launch ur3_llm_control llm_robot.launch.py
 ros2 launch ur3_llm_control llm_robot.launch.py \
   gazebo_gui:=false launch_rviz:=false
 ```
+
+## Cá nhân hóa theo MSSV
+
+MSSV thật được lưu tại `config/student_config.yaml`. Với MSSV `23020730`, hai
+số cuối là `30`, do đó `P = 30 mod 6 = 0` và mapping của bài là:
+
+- `zone_a <- red_cube`;
+- `zone_b <- yellow_cube`;
+- `zone_c <- blue_cube`.
+
+Module `student_config.py` tính mapping từ MSSV khi chạy; kế hoạch robot không
+được ghi cứng theo kết quả trên.

@@ -80,6 +80,7 @@ struct Settings
   std::vector<double> tool_orientation;
   double controller_wait_seconds;
   double approach_height;
+  double transfer_clearance;
   double grasp_clearance;
   double place_clearance;
   double planning_time;
@@ -141,6 +142,7 @@ Settings loadSettings(const rclcpp::Node::SharedPtr& node)
     node, "tool_orientation", {1.0, 0.0, 0.0, 0.0});
   settings.controller_wait_seconds = parameter<double>(node, "controller_wait_seconds", 90.0);
   settings.approach_height = parameter<double>(node, "approach_height", 0.12);
+  settings.transfer_clearance = parameter<double>(node, "transfer_clearance", 0.05);
   settings.grasp_clearance = parameter<double>(node, "grasp_clearance", 0.015);
   settings.place_clearance = parameter<double>(node, "place_clearance", 0.003);
   settings.planning_time = parameter<double>(node, "planning_time", 10.0);
@@ -175,6 +177,7 @@ Settings loadSettings(const rclcpp::Node::SharedPtr& node)
   }
 
   if (settings.controller_wait_seconds <= 0.0 || settings.approach_height <= 0.0 ||
+      settings.transfer_clearance < 0.0 ||
       settings.grasp_clearance < 0.0 || settings.place_clearance < 0.0 ||
       settings.planning_time <= 0.0 || settings.planning_attempts < 1 ||
       settings.ik_attempts < 1 || settings.ik_timeout <= 0.0 ||
@@ -438,8 +441,30 @@ private:
     auto above_release_pose = release_pose;
     above_release_pose.position.z += settings_.approach_height;
 
-    auto result = moveToPose(
-      above_release_pose, "move above " + zone_name, feedback);
+    // Carry the cube above the normal approach plane. A direct horizontal
+    // transfer at approach height can trap the UR3 between the table, the
+    // remaining cubes, and a different IK branch. The vertical Cartesian
+    // segments keep the tool orientation fixed while OMPL handles only the
+    // obstacle-free transfer at the higher plane.
+    auto transfer_start_pose = abovePoseForObject(*held_info_);
+    transfer_start_pose.position.z += settings_.transfer_clearance;
+    auto transfer_target_pose = above_release_pose;
+    transfer_target_pose.position.z += settings_.transfer_clearance;
+
+    auto result = executeCartesian(
+      transfer_start_pose, "lift to transfer height", feedback);
+    if (!result.ok()) {
+      return result;
+    }
+
+    result = moveToPoseGoal(
+      transfer_target_pose, "transfer above " + zone_name, feedback);
+    if (!result.ok()) {
+      return result;
+    }
+
+    result = executeCartesian(
+      above_release_pose, "lower to approach above " + zone_name, feedback);
     if (!result.ok()) {
       return result;
     }
@@ -569,6 +594,26 @@ private:
     return result;
   }
 
+  SkillResult moveToPoseGoal(
+    const geometry_msgs::msg::Pose& target, const std::string& motion_name,
+    const Feedback& feedback)
+  {
+    auto current = move_group_.getCurrentState(5.0);
+    if (!current) {
+      return {Status::FAILED, "current robot state is unavailable"};
+    }
+    feedback("planning " + motion_name);
+    move_group_.setStartState(*current);
+    if (!move_group_.setPoseTarget(target, settings_.end_effector_link)) {
+      move_group_.setStartStateToCurrentState();
+      return {Status::PLANNING_FAILED, "MoveIt rejected the pose goal for " + motion_name};
+    }
+    auto result = planCurrentTarget(motion_name, *current, feedback);
+    move_group_.clearPoseTargets();
+    move_group_.setStartStateToCurrentState();
+    return result;
+  }
+
   bool setNearestIKTarget(
     const geometry_msgs::msg::Pose& target,
     const moveit::core::RobotState& current_state)
@@ -591,10 +636,18 @@ private:
       request->ik_request.pose_stamped.pose = target;
       request->ik_request.avoid_collisions = true;
       request->ik_request.timeout = rclcpp::Duration::from_seconds(settings_.ik_timeout);
-      // An empty diff tells MoveGroup to seed IK from its monitored planning
-      // scene. Without is_diff=true Humble treats the empty JointState as a
-      // complete state and rejects an otherwise reachable pose.
-      request->ik_request.robot_state.is_diff = true;
+      // Seed the first request from the measured joints. Further requests use
+      // different valid seeds so the IK service can return another UR branch;
+      // repeating an empty diff only returns the same, sometimes distant,
+      // solution on every attempt.
+      moveit::core::RobotState seed_state(current_state);
+      if (attempt > 0) {
+        seed_state.setToRandomPositions(joint_group);
+        seed_state.update();
+      }
+      moveit::core::robotStateToRobotStateMsg(
+        seed_state, request->ik_request.robot_state, false);
+      request->ik_request.robot_state.is_diff = false;
 
       if (attempt == 0) {
         RCLCPP_INFO(

@@ -5,7 +5,8 @@ Package này xây dựng bốn kỹ năng điều khiển trên MoveIt 2:
 - `home()` đưa robot về cấu hình home;
 - `move_above(object)` di chuyển `tool0` tới pose an toàn phía trên cube;
 - `pick(object)` hạ theo Cartesian, đóng gripper logic, attach cube và nâng lên;
-- `place(object, zone)` di chuyển tới vùng đích, hạ cube, detach và đồng bộ
+- `place(object, zone)` nâng cube lên mặt phẳng chuyển tiếp an toàn, di chuyển tới
+  vùng đích, hạ cube, detach và đồng bộ
   pose cuối giữa MoveIt Planning Scene với Gazebo.
 
 Các lệnh được nhận qua action `/execute_skill`, khai báo trong

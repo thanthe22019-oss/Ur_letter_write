@@ -60,3 +60,15 @@ def test_target_zones_form_an_even_row(scene):
     assert zone_b[0] == pytest.approx(zone_c[0])
     assert zone_a[1] - zone_b[1] == pytest.approx(0.12)
     assert zone_b[1] - zone_c[1] == pytest.approx(0.12)
+
+
+def test_cubes_form_an_even_reachable_row(scene):
+    """Cubes stay aligned, separated, and away from the y=0 collision plane."""
+    red = scene.objects['red_cube'].pose
+    yellow = scene.objects['yellow_cube'].pose
+    blue = scene.objects['blue_cube'].pose
+    assert red[1] == pytest.approx(yellow[1])
+    assert yellow[1] == pytest.approx(blue[1])
+    assert red[1] > 0.0
+    assert yellow[0] - red[0] == pytest.approx(0.10)
+    assert blue[0] - yellow[0] == pytest.approx(0.10)
